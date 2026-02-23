@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dylib
+*.dll
+
+# Data and generated outputs
+agno_runway/outputs/
+states_2022-06-27-23.csv
+
+# Streamlit and editor artifacts
+.streamlit/
+.vscode/
+.DS_Store

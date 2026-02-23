@@ -1,0 +1,3 @@
+# Abstract
+
+We present Adaptive Graph Neural Optimization for Real-Time Runway Scheduling (AGNO-RS), a learning-driven, end-to-end differentiable approach to multi-runway sequencing. The method encodes aircraft as a dynamic conflict graph, applies a graph neural encoder with differentiable ranking, and enforces safety separations through a Lagrangian constraint layer plus robust refinement. Using OpenSky ADS-B states data, AGNO-RS produces feasible schedules with reduced delay and improved throughput compared to FCFS and classical baselines. The approach differs fundamentally from MILP and genetic algorithms by learning prioritization directly from data and optimizing a continuous surrogate of the scheduling objective.

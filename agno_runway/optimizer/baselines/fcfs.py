@@ -1,0 +1,22 @@
+from __future__ import annotations
+
+import pandas as pd
+import torch
+
+from agno_runway.data.separation_builder import build_separation_matrix
+from agno_runway.optimizer.robust_refiner import refine_schedule_with_runways
+
+
+def fcfs_schedule(flights: pd.DataFrame, runway_count: int = 2) -> pd.DataFrame:
+    df = flights.sort_values("eta_seconds").reset_index(drop=True)
+    sep_matrix = torch.tensor(
+        build_separation_matrix(df["wake_class"].tolist()), dtype=torch.float32
+    )
+    eta = torch.tensor(df["eta_seconds"].values, dtype=torch.float32)
+    schedule_times, runways = refine_schedule_with_runways(eta, sep_matrix, runway_count)
+    df["order"] = df.index
+    df["scheduled_time"] = schedule_times.numpy()
+    df["delay"] = df["scheduled_time"] - df["eta_seconds"]
+    df["safety_margin"] = 0.0
+    df["assigned_runway"] = [f"RWY_{idx + 1:02d}" for idx in runways]
+    return df
