@@ -11,8 +11,8 @@ def _apply_time_axis(df: pd.DataFrame, base_time: float | None) -> pd.DataFrame:
         df["finish"] = df["scheduled_time"] + 1.0
         return df
     base = pd.to_datetime(base_time, unit="s")
-    df["start"] = (base + pd.to_timedelta(df["scheduled_time"], unit="s")).dt.floor("S")
-    df["finish"] = (base + pd.to_timedelta(df["scheduled_time"] + 1.0, unit="s")).dt.floor("S")
+    df["start"] = (base + pd.to_timedelta(df["scheduled_time"], unit="s")).dt.floor("s")
+    df["finish"] = (base + pd.to_timedelta(df["scheduled_time"] + 1.0, unit="s")).dt.floor("s")
     return df
 
 
@@ -86,8 +86,8 @@ def runway_free_intervals(schedule: pd.DataFrame, base_time: float | None = None
     df = pd.DataFrame(rows)
     if base_time is not None:
         base = pd.to_datetime(base_time, unit="s")
-        df["start"] = (base + pd.to_timedelta(df["start"], unit="s")).dt.floor("S")
-        df["finish"] = (base + pd.to_timedelta(df["finish"], unit="s")).dt.floor("S")
+        df["start"] = (base + pd.to_timedelta(df["start"], unit="s")).dt.floor("s")
+        df["finish"] = (base + pd.to_timedelta(df["finish"], unit="s")).dt.floor("s")
     fig = px.timeline(
         df,
         x_start="start",

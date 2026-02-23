@@ -142,9 +142,9 @@ if not schedule_df.empty:
     max_time = filtered[time_col].max()
     # Floor to seconds to avoid nanosecond precision warnings
     if hasattr(min_time, "floor"):
-        min_time = min_time.floor("S")
+        min_time = min_time.floor("s")
     if hasattr(max_time, "floor"):
-        max_time = max_time.floor("S")
+        max_time = max_time.floor("s")
     if hasattr(min_time, "to_pydatetime"):
         min_time = min_time.to_pydatetime()
     if hasattr(max_time, "to_pydatetime"):
