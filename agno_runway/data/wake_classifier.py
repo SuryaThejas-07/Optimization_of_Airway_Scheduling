@@ -4,13 +4,13 @@ import pandas as pd
 
 
 def classify_wake(df: pd.DataFrame) -> pd.Series:
-    # Heuristic: speed-driven wake approximation when type is unavailable.
+    # Heuristic: speed-driven wake approximation for final approach/takeoff speeds (m/s)
     def _label(speed: float | None) -> str:
         if speed is None or pd.isna(speed):
             return "M"
-        if speed >= 240:
+        if speed >= 85:   # ~165 kts
             return "H"
-        if speed >= 170:
+        if speed >= 65:   # ~125 kts
             return "M"
         return "L"
 

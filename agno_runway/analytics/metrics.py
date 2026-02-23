@@ -27,15 +27,23 @@ def compute_metrics(
 
 
 def _safety_slack(schedule: pd.DataFrame, sep_matrix: list[list[int]]) -> tuple[float, float]:
-    indices = schedule["flight_index"].astype(int).values
-    times = schedule["scheduled_time"].values
+    # Ensure flights are sorted by scheduled time for chronological slack checking
+    df = schedule.sort_values("scheduled_time")
+    indices = df["flight_index"].astype(int).values
+    times = df["scheduled_time"].values
+    runways = df["assigned_runway"].values
     sep = np.asarray(sep_matrix)
     n = len(indices)
     slacks = []
-    for i in range(n):
-        for j in range(i):
-            required = sep[indices[i], indices[j]]
-            slacks.append(times[i] - times[j] - required)
+    
+    for i in range(1, n):
+        # Find the most recent flight ON THE SAME RUNWAY
+        for j in range(i - 1, -1, -1):
+            if runways[i] == runways[j]:
+                required = sep[indices[i], indices[j]]
+                slacks.append(times[i] - times[j] - required)
+                break  # Only check separation against the head of the runway queue
+    
     if not slacks:
         return 0.0, 0.0
     slacks = np.asarray(slacks, dtype=float)

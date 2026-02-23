@@ -8,24 +8,34 @@ def refine_schedule_with_runways(
 ) -> tuple[torch.Tensor, list[int]]:
     times = schedule_times.clone()
     n = times.numel()
-    runway_available = [0.0 for _ in range(runway_count)]
+    
+    # Track the scheduled time and the original index of the last flight on each runway
+    last_runway_time = [0.0 for _ in range(runway_count)]
+    last_runway_idx = [-1 for _ in range(runway_count)]
     runways = [0 for _ in range(n)]
 
     for i in range(n):
-        earliest = min(runway_available)
-        runway_idx = runway_available.index(earliest)
-        times[i] = max(times[i], earliest)
-
-        # Vectorized separation check: for each prior flight j, compute required time
-        if i > 0:
-            prior_times = times[:i]
-            required_sep = sep_matrix[i, :i]
-            # Compute minimum time this flight must slot at based on each prior conflict
-            min_times = prior_times + required_sep
-            times[i] = max(times[i], min_times.max())
-
-        runway_available[runway_idx] = times[i].item() if isinstance(times[i], torch.Tensor) else times[i]
+        # Choose the runway that becomes available earliest
+        earliest_available_time = min(last_runway_time)
+        runway_idx = last_runway_time.index(earliest_available_time)
+        
+        # Current flight cannot land before its ETA
+        scheduled_time = times[i].item()
+        
+        # Enforce separation only against the PREVIOUS flight on THIS SAME runway
+        prev_idx = last_runway_idx[runway_idx]
+        if prev_idx != -1:
+            required_sep = sep_matrix[i, prev_idx].item()
+            prev_time = last_runway_time[runway_idx]
+            scheduled_time = max(scheduled_time, prev_time + required_sep)
+        
+        # Also ensure it doesn't land before the runway is physically clear from its own previous operation
+        scheduled_time = max(scheduled_time, earliest_available_time)
+        
+        times[i] = scheduled_time
         runways[i] = runway_idx
+        last_runway_time[runway_idx] = scheduled_time
+        last_runway_idx[runway_idx] = i
 
     return times, runways
 

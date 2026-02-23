@@ -137,6 +137,13 @@ def main() -> None:
     print(f"Using device: {device.type}")
     model = AGNOModel(feature_dim=6, hidden_dim=64).to(device)
 
+    model_path = outputs / "model.pt"
+    if model_path.exists():
+        model.load_state_dict(torch.load(str(model_path), map_location=device))
+        print(f"Loaded trained model weights from {model_path}")
+    else:
+        print("No trained weights found — using random initialisation. Run gpu_train.py to train the model.")
+
     eta = torch.tensor(flights["eta_seconds"].values, dtype=torch.float32, device=device)
     velocity = torch.tensor(flights["velocity"].values, dtype=torch.float32, device=device)
     altitude = torch.tensor(

@@ -105,20 +105,20 @@ method_display = {
 with col1:
     st.subheader("Arrivals/Departures Timeline")
     fig = arrivals_departures_timeline(schedule_df, base_time)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 with col2:
     st.subheader("Delay Distribution")
     fig = delay_histogram(schedule_df)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 st.subheader("Runway Free-Time Intervals")
 fig = runway_free_intervals(schedule_df, base_time)
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 st.subheader("Runway Assignment Timeline")
 fig = runway_timeline(schedule_df, base_time)
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 st.subheader("Runway Assignment (Labeled Points)")
 if not schedule_df.empty:
@@ -140,6 +140,11 @@ if not schedule_df.empty:
     filtered = schedule_view[schedule_view["assigned_runway"].isin(selected_runways)]
     min_time = filtered[time_col].min()
     max_time = filtered[time_col].max()
+    # Floor to seconds to avoid nanosecond precision warnings
+    if hasattr(min_time, "floor"):
+        min_time = min_time.floor("S")
+    if hasattr(max_time, "floor"):
+        max_time = max_time.floor("S")
     if hasattr(min_time, "to_pydatetime"):
         min_time = min_time.to_pydatetime()
     if hasattr(max_time, "to_pydatetime"):
@@ -168,7 +173,7 @@ if not schedule_df.empty:
     )
     fig.update_traces(textposition="top center", marker=dict(size=8))
     fig.update_yaxes(autorange="reversed")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 st.subheader("Comparative Metrics")
 metrics = {}
@@ -182,7 +187,7 @@ if metrics:
     best_by_score_name = best_by_score["method_display"].iloc[0]
     st.success("Designated best method: AGNO-RS+ (unique optimized solution)")
     st.info(f"Best by composite score in this run: {best_by_score_name}")
-    st.dataframe(metric_df, use_container_width=True)
+    st.dataframe(metric_df, width="stretch")
     fig = px.bar(
         metric_df,
         x="method_display",
@@ -190,7 +195,7 @@ if metrics:
         barmode="group",
         title="AGNO vs Baselines",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 else:
     st.info("Run main.py to generate scheduling outputs and baselines.")
 
@@ -211,19 +216,20 @@ if not schedule_df.empty:
     rationale_df = schedule_df[available_cols]
     if "order" in schedule_df.columns:
         rationale_df = rationale_df.join(schedule_df["order"]).sort_values("order")
-    st.dataframe(rationale_df, use_container_width=True)
+    st.dataframe(rationale_df, width="stretch")
 
 st.subheader("Delay vs Scheduled Time")
 if not schedule_df.empty:
+    hover_cols = [c for c in ["callsign", "wake_class", "priority_score"] if c in schedule_df.columns]
     fig = px.scatter(
         schedule_df,
         x="scheduled_time",
         y="delay",
         color="assigned_runway",
-        hover_data=["callsign", "wake_class", "priority_score"],
+        hover_data=hover_cols if hover_cols else None,
         title="Delay vs Scheduled Time",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 st.subheader("Priority vs Delay (Model Behavior)")
 if not schedule_df.empty and "priority_score" in schedule_df.columns:
@@ -235,7 +241,7 @@ if not schedule_df.empty and "priority_score" in schedule_df.columns:
         hover_data=["callsign", "wake_class", "assigned_runway"],
         title="Priority vs Delay",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 st.subheader("Delay by Wake Class")
 if not schedule_df.empty and "wake_class" in schedule_df.columns:
@@ -246,7 +252,7 @@ if not schedule_df.empty and "wake_class" in schedule_df.columns:
         color="event_type",
         title="Delay Distribution by Wake Class",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 st.subheader("Critical/Emergency Scenario Analysis")
 st.markdown(
@@ -289,7 +295,7 @@ if baseline_schedules:
 
     if summary_rows:
         summary_df = pd.DataFrame(summary_rows).sort_values("avg_delay")
-        st.dataframe(summary_df, use_container_width=True)
+        st.dataframe(summary_df, width="stretch")
         fig = px.bar(
             summary_df,
             x="method",
@@ -297,7 +303,7 @@ if baseline_schedules:
             barmode="group",
             title="Critical Flights: Delay and Safety Comparison",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     if critical_frames:
         critical_df = pd.concat(critical_frames, ignore_index=True)
@@ -308,7 +314,7 @@ if baseline_schedules:
             color="event_type",
             title="Critical Flights: Delay Distribution by Method",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 else:
     st.info("Baseline schedules not found. Run main.py to generate comparisons.")
 
@@ -318,12 +324,17 @@ if separation_path.exists() and not schedule_df.empty:
     sep = payload.get("matrix", [])
     if sep:
         times = schedule_df.sort_values("order")["scheduled_time"].values
+        runways = schedule_df.sort_values("order")["assigned_runway"].values
         slack = []
         for i in range(len(times)):
             row = []
             for j in range(len(times)):
-                row.append((times[i] - times[j]) - sep[i][j])
+                if runways[i] == runways[j] and i > j:
+                    row.append((times[i] - times[j]) - sep[i][j])
+                else:
+                    # Not on same runway or diagonal/future: implicitly safe
+                    row.append(1000.0)
             slack.append(row)
         fig = go.Figure(data=go.Heatmap(z=slack, colorscale="RdBu", zmid=0))
         fig.update_layout(title="Separation Slack (negative = conflict)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
