@@ -149,7 +149,7 @@ agno_runway/
 │   ├── event_extractor.py        # Geofence-based event detection
 │   ├── wake_classifier.py        # Aircraft wake class assignment
 │   ├── separation_builder.py     # FAA separation matrix construction
-│   └── runway_geofence.py        # Haversine distance calculations
+│   └── runway_geofence.py        # Haversine distance calculation
 │
 ├── optimizer/                     # Core optimization engines
 │   ├── graph_model.py            # GNN architecture (GraphEncoder + scoring)
