@@ -1,4 +1,6 @@
 .venv/
+venv/
+venv_clean_check/
 __pycache__/
 *.pyc
 *.pyo

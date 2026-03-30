@@ -1,0 +1,29 @@
+# AGNO-RS+ Dependencies
+# Core ML/Data
+torch==2.1.2
+torch-geometric==2.5.3
+numpy==1.24.3
+pandas==2.0.3
+scipy==1.11.2
+scikit-learn==1.3.1
+
+# Visualization
+plotly==5.17.0
+streamlit==1.28.1
+
+# Optimization
+pulp==2.7.0
+
+# API
+fastapi==0.115.2
+uvicorn==0.30.6
+pydantic==2.9.2
+
+# Data Processing & Optimization
+pyarrow==13.0.0  # For Parquet support
+pandera==0.17.1  # For schema validation
+
+# Development/Testing (optional)
+pytest==7.4.2
+black==23.9.1
+flake8==6.1.0

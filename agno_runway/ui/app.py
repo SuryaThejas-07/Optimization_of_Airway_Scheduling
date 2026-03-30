@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import pandas as pd
 import plotly.express as px
@@ -18,6 +22,37 @@ from agno_runway.ui.timeline import delay_histogram
 
 st.set_page_config(page_title="AGNO-RS+ Dashboard", layout="wide")
 
+
+def _api_call(
+    base_url: str,
+    method: str,
+    path: str,
+    params: dict[str, object] | None = None,
+    payload: dict[str, object] | None = None,
+) -> tuple[bool, dict[str, object]]:
+    try:
+        url = f"{base_url.rstrip('/')}{path}"
+        if params:
+            clean_params = {k: v for k, v in params.items() if v is not None}
+            query = urllib.parse.urlencode(clean_params)
+            if query:
+                url = f"{url}?{query}"
+
+        data = None
+        headers = {"Content-Type": "application/json"}
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(request, timeout=20) as response:
+            body = response.read().decode("utf-8")
+            return True, json.loads(body) if body else {}
+    except urllib.error.HTTPError as exc:
+        return False, {"error": f"HTTP {exc.code}: {exc.reason}"}
+    except Exception as exc:  # pragma: no cover - UI safety
+        return False, {"error": str(exc)}
+
+
 root = Path(__file__).resolve().parents[1]
 outputs = root / "outputs"
 flights_path = outputs / "flights.csv"
@@ -28,7 +63,205 @@ baselines_path = outputs / "baselines.json"
 baseline_schedules_path = outputs / "baseline_schedules.json"
 separation_path = outputs / "separation.json"
 
-st.title("AGNO-RS+ (Adaptive Graph Neural Optimization) — Best-Optimized Runway Scheduling")
+st.title(
+    "AGNO-RS+ (Adaptive Graph Neural Optimization) — Best-Optimized Runway Scheduling"
+)
+
+st.sidebar.header("Live API Operations")
+api_base_url = st.sidebar.text_input("API Base URL", value="http://127.0.0.1:8000")
+auto_refresh = st.sidebar.checkbox("Auto refresh safety monitor", value=False)
+refresh_seconds = st.sidebar.slider("Refresh interval (sec)", 1, 10, 2)
+
+ok_health, health_payload = _api_call(api_base_url, "GET", "/health")
+if ok_health:
+    st.sidebar.success("API connected")
+else:
+    st.sidebar.warning(
+        "API unavailable. Start server: python -m agno_runway.api.run_server"
+    )
+
+live_tab, replay_tab, safety_tab = st.tabs(
+    ["Live Control Panel", "Replay Import/Export", "Safety Monitor"]
+)
+
+with live_tab:
+    st.subheader("Live Simulation Control")
+    lc1, lc2, lc3 = st.columns(3)
+    with lc1:
+        live_interval = st.number_input(
+            "Loop interval (sec)", min_value=0.1, max_value=10.0, value=1.0, step=0.1
+        )
+    with lc2:
+        max_ticks = st.number_input(
+            "Max ticks (0 = unlimited)", min_value=0, max_value=100000, value=0, step=1
+        )
+    with lc3:
+        st.write("")
+        st.write("")
+        if st.button("Start Live", use_container_width=True):
+            params = {
+                "loop_interval_seconds": live_interval,
+                "max_ticks": max_ticks if max_ticks > 0 else None,
+            }
+            ok, resp = _api_call(
+                api_base_url, "POST", "/simulation/live/start", params=params
+            )
+            if ok:
+                st.success(resp.get("message", "Live simulation started"))
+            else:
+                st.error(resp.get("error", "Failed to start live simulation"))
+
+    if st.button("Stop Live", use_container_width=True):
+        ok, resp = _api_call(api_base_url, "POST", "/simulation/live/stop")
+        if ok:
+            st.info(resp.get("message", "Live simulation stopped"))
+        else:
+            st.error(resp.get("error", "Failed to stop live simulation"))
+
+    ok_status, status_payload = _api_call(
+        api_base_url, "GET", "/simulation/live/status"
+    )
+    if ok_status:
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Running", "Yes" if status_payload.get("running") else "No")
+        s2.metric(
+            "Current Time", f"{float(status_payload.get('current_time', 0.0)):.1f}s"
+        )
+        s3.metric("Decisions", int(status_payload.get("decision_count", 0)))
+        s4.metric("Recorded Ticks", int(status_payload.get("recorded_ticks", 0)))
+
+        st.markdown("### Recent Scheduling Decisions")
+        decision_limit = st.slider(
+            "Show last N decisions", min_value=5, max_value=200, value=25, step=5
+        )
+        ok_decisions, decisions_payload = _api_call(
+            api_base_url,
+            "GET",
+            "/simulation/live/decisions",
+            params={"limit": decision_limit},
+        )
+        if ok_decisions:
+            decisions = decisions_payload.get("decisions", [])
+            if decisions:
+                decisions_df = pd.DataFrame(decisions)
+                preferred_cols = [
+                    "tick_time",
+                    "flight_id",
+                    "runway",
+                    "scheduled_time",
+                    "delay_seconds",
+                    "emergency",
+                ]
+                show_cols = [c for c in preferred_cols if c in decisions_df.columns]
+                if show_cols:
+                    decisions_df = decisions_df[show_cols]
+                st.dataframe(
+                    decisions_df.sort_values(
+                        by="tick_time", ascending=False
+                    ).reset_index(drop=True),
+                    use_container_width=True,
+                )
+            else:
+                st.info(
+                    "No decisions yet. Start live simulation to populate this table."
+                )
+        else:
+            st.warning(
+                decisions_payload.get(
+                    "error", "Unable to fetch live decisions from API."
+                )
+            )
+    else:
+        st.warning(status_payload.get("error", "Unable to fetch live status"))
+
+with replay_tab:
+    st.subheader("Deterministic Replay")
+    if st.button("Export Current Scenario", use_container_width=True):
+        ok, resp = _api_call(api_base_url, "GET", "/simulation/scenario")
+        if ok:
+            scenario = resp.get("scenario", {})
+            st.session_state["exported_scenario_json"] = json.dumps(scenario, indent=2)
+            st.success(
+                f"Scenario exported ({resp.get('recorded_ticks', 0)} recorded ticks)"
+            )
+        else:
+            st.error(resp.get("error", "Failed to export scenario"))
+
+    exported = st.session_state.get("exported_scenario_json")
+    if exported:
+        st.download_button(
+            "Download Scenario JSON",
+            data=exported,
+            file_name="agno_rs_scenario.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+    uploaded = st.file_uploader("Upload Scenario JSON", type=["json"])
+    reset_before_replay = st.checkbox("Reset state before replay", value=True)
+    if st.button("Replay Uploaded Scenario", use_container_width=True):
+        if uploaded is None:
+            st.error("Please upload a scenario JSON file first.")
+        else:
+            try:
+                scenario_payload = json.loads(uploaded.read().decode("utf-8"))
+                ok, resp = _api_call(
+                    api_base_url,
+                    "POST",
+                    "/simulation/scenario/replay",
+                    params={"reset_state": str(reset_before_replay).lower()},
+                    payload=scenario_payload,
+                )
+                if ok:
+                    st.success(
+                        f"Replay complete: {resp.get('replayed_ticks', 0)} ticks"
+                    )
+                    st.json(
+                        {
+                            "final_time": resp.get("final_time"),
+                            "metrics": resp.get("metrics", {}),
+                        }
+                    )
+                else:
+                    st.error(resp.get("error", "Replay failed"))
+            except Exception as exc:
+                st.error(f"Invalid scenario JSON: {exc}")
+
+with safety_tab:
+    st.subheader("Safety Monitor (Real-Time)")
+    ok_metrics, metrics_payload = _api_call(api_base_url, "GET", "/metrics")
+    ok_status, status_payload = _api_call(
+        api_base_url, "GET", "/simulation/live/status"
+    )
+
+    if ok_metrics and ok_status:
+        total_flights = int(metrics_payload.get("total_flights", 0))
+        violations = int(metrics_payload.get("safety_violations", 0))
+        avg_delay = float(metrics_payload.get("average_delay_seconds", 0.0))
+        throughput = float(metrics_payload.get("throughput_flights_per_second", 0.0))
+        running = bool(status_payload.get("running", False))
+
+        if violations > 0:
+            status_label = "CRITICAL"
+            status_color = "red"
+        elif running:
+            status_label = "LIVE"
+            status_color = "green"
+        else:
+            status_label = "IDLE"
+            status_color = "orange"
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.markdown(
+            f"<div style='padding:10px;border-radius:8px;background:{status_color};color:white;text-align:center;'><b>{status_label}</b></div>",
+            unsafe_allow_html=True,
+        )
+        c2.metric("Safety Violations", violations)
+        c3.metric("Total Flights", total_flights)
+        c4.metric("Avg Delay (s)", f"{avg_delay:.2f}")
+        c5.metric("Throughput", f"{throughput:.4f} f/s")
+    else:
+        st.warning("Safety monitor unavailable: API not reachable.")
 st.markdown(
     """
 **What it solves**: real-time runway scheduling under safety separation, mixed traffic, and congestion.
@@ -90,6 +323,7 @@ def _with_flight_label(df: pd.DataFrame) -> pd.DataFrame:
     df["flight_label"] = df["flight_label"].where(df["flight_label"] != "", "UNKNOWN")
     return df
 
+
 best_method = None
 if best_method_path.exists():
     best_method = json.loads(best_method_path.read_text()).get("method")
@@ -105,20 +339,20 @@ method_display = {
 with col1:
     st.subheader("Arrivals/Departures Timeline")
     fig = arrivals_departures_timeline(schedule_df, base_time)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 with col2:
     st.subheader("Delay Distribution")
     fig = delay_histogram(schedule_df)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Runway Free-Time Intervals")
 fig = runway_free_intervals(schedule_df, base_time)
-st.plotly_chart(fig, width="stretch")
+st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Runway Assignment Timeline")
 fig = runway_timeline(schedule_df, base_time)
-st.plotly_chart(fig, width="stretch")
+st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Runway Assignment (Labeled Points)")
 if not schedule_df.empty:
@@ -155,25 +389,33 @@ if not schedule_df.empty:
         max_value=max_time,
         value=(min_time, max_time),
     )
-    filtered = filtered[(filtered[time_col] >= time_range[0]) & (filtered[time_col] <= time_range[1])]
+    filtered = filtered[
+        (filtered[time_col] >= time_range[0]) & (filtered[time_col] <= time_range[1])
+    ]
     max_labels = st.slider("Max labels", min_value=10, max_value=200, value=40, step=10)
     filtered = filtered.sort_values(time_col)
     filtered["label_for_plot"] = ""
     if len(filtered) > 0:
         label_indices = filtered.index[: min(len(filtered), max_labels)]
-        filtered.loc[label_indices, "label_for_plot"] = filtered.loc[label_indices, "flight_label"]
+        filtered.loc[label_indices, "label_for_plot"] = filtered.loc[
+            label_indices, "flight_label"
+        ]
     fig = px.scatter(
         filtered,
         x=time_col,
         y="assigned_runway",
         color="event_type",
         text="label_for_plot",
-        hover_data=[col for col in ["callsign", "aircraft", "icao24", "delay"] if col in filtered.columns],
+        hover_data=[
+            col
+            for col in ["callsign", "aircraft", "icao24", "delay"]
+            if col in filtered.columns
+        ],
         title="Flights by Runway Over Time",
     )
     fig.update_traces(textposition="top center", marker=dict(size=8))
     fig.update_yaxes(autorange="reversed")
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Comparative Metrics")
 metrics = {}
@@ -181,13 +423,17 @@ if baselines_path.exists():
     metrics = json.loads(baselines_path.read_text())
 
 if metrics:
-    metric_df = pd.DataFrame(metrics).T.reset_index().rename(columns={"index": "method"})
-    metric_df["method_display"] = metric_df["method"].map(method_display).fillna(metric_df["method"])
+    metric_df = (
+        pd.DataFrame(metrics).T.reset_index().rename(columns={"index": "method"})
+    )
+    metric_df["method_display"] = (
+        metric_df["method"].map(method_display).fillna(metric_df["method"])
+    )
     best_by_score = metric_df.sort_values("composite_score", ascending=False).head(1)
     best_by_score_name = best_by_score["method_display"].iloc[0]
     st.success("Designated best method: AGNO-RS+ (unique optimized solution)")
     st.info(f"Best by composite score in this run: {best_by_score_name}")
-    st.dataframe(metric_df, width="stretch")
+    st.dataframe(metric_df, use_container_width=True)
     fig = px.bar(
         metric_df,
         x="method_display",
@@ -195,7 +441,7 @@ if metrics:
         barmode="group",
         title="AGNO vs Baselines",
     )
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Run main.py to generate scheduling outputs and baselines.")
 
@@ -216,11 +462,15 @@ if not schedule_df.empty:
     rationale_df = schedule_df[available_cols]
     if "order" in schedule_df.columns:
         rationale_df = rationale_df.join(schedule_df["order"]).sort_values("order")
-    st.dataframe(rationale_df, width="stretch")
+    st.dataframe(rationale_df, use_container_width=True)
 
 st.subheader("Delay vs Scheduled Time")
 if not schedule_df.empty:
-    hover_cols = [c for c in ["callsign", "wake_class", "priority_score"] if c in schedule_df.columns]
+    hover_cols = [
+        c
+        for c in ["callsign", "wake_class", "priority_score"]
+        if c in schedule_df.columns
+    ]
     fig = px.scatter(
         schedule_df,
         x="scheduled_time",
@@ -229,7 +479,7 @@ if not schedule_df.empty:
         hover_data=hover_cols if hover_cols else None,
         title="Delay vs Scheduled Time",
     )
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Priority vs Delay (Model Behavior)")
 if not schedule_df.empty and "priority_score" in schedule_df.columns:
@@ -241,7 +491,7 @@ if not schedule_df.empty and "priority_score" in schedule_df.columns:
         hover_data=["callsign", "wake_class", "assigned_runway"],
         title="Priority vs Delay",
     )
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Delay by Wake Class")
 if not schedule_df.empty and "wake_class" in schedule_df.columns:
@@ -252,7 +502,7 @@ if not schedule_df.empty and "wake_class" in schedule_df.columns:
         color="event_type",
         title="Delay Distribution by Wake Class",
     )
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Critical/Emergency Scenario Analysis")
 st.markdown(
@@ -267,7 +517,9 @@ if baseline_schedules_path.exists():
     baseline_schedules = json.loads(baseline_schedules_path.read_text())
 
 if baseline_schedules:
-    percentile = st.slider("Critical priority percentile", min_value=80, max_value=99, value=95, step=1)
+    percentile = st.slider(
+        "Critical priority percentile", min_value=80, max_value=99, value=95, step=1
+    )
     summary_rows = []
     critical_frames = []
     for method, rows in baseline_schedules.items():
@@ -295,15 +547,19 @@ if baseline_schedules:
 
     if summary_rows:
         summary_df = pd.DataFrame(summary_rows).sort_values("avg_delay")
-        st.dataframe(summary_df, width="stretch")
+        st.dataframe(summary_df, use_container_width=True)
         fig = px.bar(
             summary_df,
             x="method",
-            y=[col for col in ["avg_delay", "max_delay", "avg_safety_margin"] if col in summary_df.columns],
+            y=[
+                col
+                for col in ["avg_delay", "max_delay", "avg_safety_margin"]
+                if col in summary_df.columns
+            ],
             barmode="group",
             title="Critical Flights: Delay and Safety Comparison",
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
     if critical_frames:
         critical_df = pd.concat(critical_frames, ignore_index=True)
@@ -314,7 +570,7 @@ if baseline_schedules:
             color="event_type",
             title="Critical Flights: Delay Distribution by Method",
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("Baseline schedules not found. Run main.py to generate comparisons.")
 
@@ -337,4 +593,8 @@ if separation_path.exists() and not schedule_df.empty:
             slack.append(row)
         fig = go.Figure(data=go.Heatmap(z=slack, colorscale="RdBu", zmid=0))
         fig.update_layout(title="Separation Slack (negative = conflict)")
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
+
+if auto_refresh:
+    time.sleep(refresh_seconds)
+    st.rerun()
